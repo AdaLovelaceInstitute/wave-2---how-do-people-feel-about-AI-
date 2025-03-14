@@ -2,9 +2,12 @@
 Second wave of survey results of attitudes towards various uses of AI (Published March 2025, fieldwork undertaken Otober-November 2023). This was a nationally representative survey of over 3,000 adults in the UK aged over 18. Fieldwork was carried out by NatCen, the project was in partnership with The Alan Turing Insitute as part of the Public Voices in AI programme funded by UKRI.  You can also find this report and a summary on the Ada Lovelace website and (https://attitudestoai.uk/).
 
 Authors:
-Roshni Modhvadia: https://www.adalovelaceinstitute.org/person/roshni-modhvadia/.
+Roshni Modhvadia: https://www.adalovelaceinstitute.org/person/roshni-modhvadia/
+
 Tvesha Sippy: https://www.turing.ac.uk/people/researchers/tvesha-sippy
+
 Octavia Field Reid: https://www.adalovelaceinstitute.org/person/octavia-field-reid/
+
 Helen Margetts: https://www.turing.ac.uk/people/researchers/helen-margetts
 
 This repository contains:
