@@ -1,0 +1,1678 @@
+---
+title: 'Wave 2: How do people feel about AI'
+output: html_document
+date: "2025-03-24"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+library(haven)
+library(scales)
+library(psych)
+library(survey)
+library(jtools)
+library(nFactors)
+library(sjPlot) 
+library(purrr)
+library(broom)
+library(labelled)
+library(stringr)
+library(descr)
+library(pollster)
+library(knitr)
+```
+
+Read data
+```{r}
+df1 <- read_dta("Nov24_AdaTuring_Panel_20241202.dta")
+```
+
+Function to rename technologies
+```{r}
+recode_technologies <- function(Technology_specific) {
+  recode(Technology_specific,
+         "WB" = "Assessing welfare eligibility",
+         "WEL" = "Assessing welfare eligibility",
+         "Cancer" =  "Assessing risk of cancer",
+         "CAN" = "Assessing risk of cancer",
+         "Loan" = "Assessing loan repayment risk",
+         "LOAN" = "Assessing loan repayment risk",
+         "FR" = "Facial recognition for policing",
+         "PS" = "Facial recognition for policing",
+         "LLM" = "Large language models (e.g., ChatGPT)",
+         "Chatbot" = "Mental health chatbots",
+         "RoboCare" = "Robotic care assistants",
+         "RCA" = "Robotic care assistants",
+         "DC" = "Driverless cars",
+         "Car" =  "Driverless cars")
+  
+}
+```
+
+Demographic variables 
+```{r}
+# create a tidied demographic variable data frame
+demog <- df1 %>%
+  remove_val_labels() %>%
+  dplyr::select(
+  panelid_2, Nov24_Weight,
+  Cur_Ethnic6,
+  AT_AgeCat,
+  Cur_Sex,
+  AT_HEdQual,
+  Cur_SubjInc,
+  Cur_HHIncomeEquiv4_21,
+  AT_DigSkills,
+  DigAccess,
+  ) %>%
+  ## 'low income' - objective measure - 1.5k or less
+  mutate(Low_Income_finance = 
+           case_when(
+            Cur_HHIncomeEquiv4_21 < 0 ~ as.character(NA),
+             Cur_HHIncomeEquiv4_21 < 3 ~ "Low",
+            TRUE ~ "High"
+           )) %>%
+  select(!Cur_HHIncomeEquiv4_21) %>%
+  
+  ## 'low income' - finding it quite or very difficult, or just about getting by
+  mutate(Low_Income_Subjective =
+           case_when(
+              Cur_SubjInc < 0 ~ as.character(NA),
+              Cur_SubjInc > 2 ~ "Low",
+              TRUE ~ "High"
+           )) %>%
+  select(!Cur_SubjInc) %>%
+ ## Ethnicity
+  mutate(Cur_Ethnic6 = 
+           case_when(Cur_Ethnic6 < 0 ~ as.character(NA),
+                     Cur_Ethnic6 == 1 ~ "White British",
+                     Cur_Ethnic6 == 2 ~ "White other",
+                     Cur_Ethnic6 == 3 ~ "Mixed or multiple",
+                     Cur_Ethnic6 == 4 ~ "Asian or Asian British",
+                     Cur_Ethnic6 == 5 ~ "Black or Black British",
+                     Cur_Ethnic6 == 6 ~ "Other")) %>%
+           ## age
+  mutate(AT_AgeCat = 
+           case_when(AT_AgeCat < 0 ~ as.character(NA),
+                     AT_AgeCat == 1 ~ "18-24 yrs",
+                     AT_AgeCat == 2 ~ "25-34 yrs",
+                     AT_AgeCat == 3 ~ "35-44 yrs",
+                     AT_AgeCat == 4 ~ "45-54 yrs",
+                     AT_AgeCat == 5 ~ "55-64 yrs",
+                     AT_AgeCat == 6 ~ "65-74 yrs",
+                     AT_AgeCat == 7 ~ "75+ yrs")) %>%
+           ## sex
+  mutate(Cur_Sex = 
+           case_when(Cur_Sex <0 ~ as.character(NA),
+                     Cur_Sex == 1 ~ "Female",
+                     Cur_Sex == 2 ~ "Male")) %>%
+           ## education level 
+  mutate(AT_HEdQual =  
+                    case_when(AT_HEdQual < 0 ~ as.character(NA),
+                              AT_HEdQual == 1 ~ "Degree level qualification(s)",
+                              AT_HEdQual == 2 ~ "Non-degree level qualifications",
+                              AT_HEdQual == 3 ~ "No qualifications",
+                              AT_HEdQual == 4 ~ "Other")) %>%
+           mutate(AT_DigSkills = 
+                    case_when(AT_DigSkills < 0 ~ as.character(NA),
+                              AT_DigSkills == 1 ~ "Has digital skills",
+                              AT_DigSkills == 2 ~ "No digital skills")) %>%
+   mutate(DigAccess = 
+                    case_when(DigAccess < 0 ~ as.character(NA),
+                              DigAccess == 1 ~ "Mobile and data",
+                              DigAccess == 2 ~ "Mobile, no data",
+                              DigAccess == 3~ "No mobile")) 
+           
+
+demog.l <- demog %>%
+  pivot_longer(names_to = "Q_Demo",
+               values_to = "A_Demo",
+               Cur_Ethnic6:Low_Income_Subjective)
+```
+
+
+### Awareness and experience of AI uses ### 
+
+Figure 1: Awareness of AI technology 
+```{r}
+aware.df <- df1 %>%
+  select(panelid_2, Nov24_Weight, 
+         HeardFR,
+         HeardWB,
+         HeardCancer,
+         HeardLoan,
+         HeardLLM,
+         HeardChatbot,
+         HeardRoboCare,
+         HeardCar
+         )%>%
+  ## pivot longer
+  pivot_longer( # convert to long format 
+    names_to = "Question",
+    values_to = "Value",
+    HeardFR:HeardCar
+  )
+
+aware.df$Technology_specific <- sub('.*Heard','',
+                                      aware.df$Question)
+
+aware.df <- aware.df %>%
+  mutate(Value = 
+           case_when(Value == -8 | Value == -9| Value == 3 ~ "Not sure/prefer not to say",
+                     Value == 1 ~ "Yes",
+                     Value == 2 ~ "No",
+                     TRUE ~ as.character(NA)))
+
+aware.df$Value <- factor(aware.df$Value,levels = c("No", "Not sure/prefer not to say", "Yes")) 
+
+aware.df %>%
+  mutate(Technology_specific = 
+           recode_technologies(Technology_specific)) %>%
+  drop_na(Value) %>%
+  group_by(Technology_specific, Value) %>%
+  tally(wt = Nov24_Weight) %>%
+  mutate(pct = n/sum(n)) %>%
+  mutate(Value_factor = 
+           case_when(Value == "Yes" ~ "High", 
+                     TRUE ~ "Other")) %>%
+  group_by(Technology_specific, Value_factor) %>%
+  mutate(Sum_f = sum(pct)) %>%
+  #### ggplot #####
+  ggplot(aes(y=pct, x=reorder(Technology_specific, -Sum_f), fill = Value)) +
+  geom_col(width = 0.7) + 
+  scale_y_continuous(name = "", label = percent) +
+  theme_minimal() + 
+  theme(#panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+                        legend.position = "top", legend.text = element_text(size=10), legend.title =  element_text(size = 10), legend.justification = "left") +
+  ggtitle("Figure x. Awareness of uses of AI technologies", subtitle = "Before today, had you heard of AI for...") +
+  theme(plot.title = element_text(size = 12)) +
+  scale_fill_manual(breaks = c("Yes","Not sure/prefer not to say", "No"), 
+                                values = c(
+                               "#005D5D",
+                               "#D5DFE8",
+                               "#A3219A"
+                               ),
+                    name = "") +
+  xlab("") +
+  geom_text(
+    aes(label = scales::percent(pct, accuracy = 1)), position = position_stack(vjust = .5),
+    size = 2.5, colour = "white") +
+  coord_flip()
+```
+
+Figure 2: Personal experience with LLMs
+```{r}
+experienceLLM.df <- df1 %>%
+  select(panelid_2, Nov24_Weight,
+         ExpLLM_SearchTool_q:ExpLLM_Guidance_q) %>%
+  ## pivot longer
+  pivot_longer( # convert to long format 
+    names_to = "Question",
+    values_to = "Value",
+    ExpLLM_SearchTool_q:ExpLLM_Guidance_q
+  )
+
+
+experienceLLM.df <- experienceLLM.df %>%
+  mutate(Value = 
+           case_when(Value == -8 | Value == -9| Value == 3 ~ "Don't know/prefer not to say",
+                     Value == 1 ~ "Yes, a few times",
+                     Value == 2 ~ "Yes, regularly",
+                     Value == 4 ~ "No, but I am open to using it",
+                     Value == 5 ~ "No, and I don't want to",
+                     TRUE ~ as.character(NA)))
+
+
+experienceLLM.df <- experienceLLM.df %>%
+  mutate("Question" = 
+  dplyr::recode(Question, 
+      "ExpLLM_SearchTool_q" = "Search for answers/recommendations",
+      "ExpLLM_EntFun_q" = "Entertainment (e.g.,image/video/audio generation)",
+      "ExpLLM_Educational_q" = "Educational purposes",
+      "ExpLLM_JobApplication_q" = "Supporting job applications",
+      "ExpLLM_EverydayTasks_q" = "Supporting everyday tasks (e.g., writing emails)",
+      "ExpLLM_Guidance_q" = "Guidance on issues (e.g., legal disputes, benefit claims, taxation"))
+```
+
+```{r, fig.width=12, fig.height=5}
+experienceLLM.df %>%
+  drop_na(Value) %>%
+  group_by(Question, Value) %>%
+  tally(wt = Nov24_Weight) %>%
+  mutate(pct = n/sum(n)) %>%
+  mutate(Value_factor = 
+           case_when(Value == "Yes, a few times" | Value == "Yes, regularly" | Value == "No, but I am open to using it" ~ "High", 
+                     TRUE ~ "Other")) %>%
+  group_by(Question, Value_factor) %>%
+  mutate(Sum_f = sum(pct)) %>%
+  #### ggplot #####
+  ggplot(aes(y=pct, x=reorder(Question, +Sum_f), fill = Value)) +
+  geom_col(width = 0.7) + 
+  scale_y_continuous(name = "", label = percent) +
+  theme_minimal() + 
+  theme(#panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+                        legend.position = "top", legend.text = element_text(size=8), legend.title =  element_text(size = 8), legend.justification = "left") +
+  labs(title="Experience with large language models", subtitle = "Have you had any personal experience with using large language models for the following tasks...") + 
+  theme(plot.title = element_text(size = 10)) +
+  scale_fill_manual(breaks = c("Yes, regularly", "Yes, a few times", 
+                               "No, but I am open to using it", "No, and I don't want to", "Don't know/prefer not to say"), 
+                                values = c(
+                               "#005D5D",
+                               "#009F8C",
+                               
+                               "#009FD1",
+                               "#A3219A",
+                               "#D5DFE8"
+                               ),
+                    name = "") +
+  xlab("") +
+  geom_text(
+    aes(label = scales::percent(pct, accuracy = 1)), position = position_stack(vjust = .5), size = 3, colour = "white") +
+  coord_flip()
+```
+
+Experience with LLMs for one or more of the tasks we asked about
+```{r}
+# how many people have experience with any of the uses we provided?
+experienceLLM.df <- experienceLLM.df %>%
+  mutate(any = 
+           case_when(Value == "Yes, a few times" | Value == "Yes, regularly" ~ 1,
+            TRUE ~ 0))
+
+experienceLLM.df <- experienceLLM.df %>%
+  group_by(panelid_2) %>%
+  mutate(sum_any = sum(any)) %>%
+  mutate(any_factor = case_when(sum_any > 0 ~ "Has experienced any", TRUE ~ "Has not")) 
+
+experienceLLM.df %>%
+  group_by(panelid_2)%>%
+  filter(row_number()==1) %>%
+  group_by(any_factor) %>%
+  tally(wt = Nov24_Weight) %>%
+  mutate(pct = n/sum(n))
+```
+
+Openness to LLM use by group
+```{r}
+## group those not open vs everyone else in the sample
+experience.all <- inner_join(experienceLLM.df, demog.l)
+
+experience.all <- experience.all %>%
+  mutate(Openness = 
+           case_when(Value == "No, and I don't want to" ~ "Not open",
+                     Value == "Don't know/prefer not to say" ~ "Don't know/prefer not to say",
+                     TRUE ~ "Open"))
+
+experience.all.wide <- experience.all %>%
+  filter(Value != "Don't know/prefer not to say") %>%
+  drop_na(A_Demo) %>%
+  filter(Q_Demo == "Cur_Ethnic6" | Q_Demo == "AT_DigSkills" | Q_Demo == "Low_Income_finance") %>%
+  pivot_wider(names_from = Q_Demo, values_from = A_Demo)
+
+experience.recommendations <- experience.all.wide %>%
+  filter(Question == "Search for answers/recommendations")
+
+experience.education <- experience.all.wide %>%
+  filter(Question == "Educational purposes")
+
+experience.jobs <- experience.all.wide %>%
+  filter(Question == "Supporting job applications")
+
+experience.emails <- experience.all.wide %>%
+  filter(Question == "Supporting everyday tasks (e.g., writing emails)")
+
+experience.guidance <- experience.all.wide %>%
+  filter(Question == "Guidance on issues (e.g., legal disputes, benefit claims, taxation") 
+
+experience.entertainment <- experience.all.wide %>%
+  filter(Question == "Entertainment (e.g.,image/video/audio generation)") 
+
+experience.guidance <-experience.guidance %>%
+  mutate(Openness = as.factor(Openness)) %>%
+  mutate(Cur_Ethnic6 = as.factor(Cur_Ethnic6)) %>%
+  mutate(AT_DigSkills = as.factor(AT_DigSkills)) %>%
+  mutate(Low_Income_finance = as.factor(Low_Income_finance))
+
+experience.jobs <-experience.jobs %>%
+  mutate(Openness = as.factor(Openness)) %>%
+  mutate(Cur_Ethnic6 = as.factor(Cur_Ethnic6)) %>%
+  mutate(AT_DigSkills = as.factor(AT_DigSkills)) %>%
+  mutate(Low_Income_finance = as.factor(Low_Income_finance))
+
+
+experience.education <-experience.education %>%
+  mutate(Openness = as.factor(Openness)) %>%
+  mutate(Cur_Ethnic6 = as.factor(Cur_Ethnic6)) %>%
+  mutate(AT_DigSkills = as.factor(AT_DigSkills)) %>%
+  mutate(Low_Income_finance = as.factor(Low_Income_finance))
+
+
+experience.emails <-experience.emails %>%
+  mutate(Openness = as.factor(Openness)) %>%
+  mutate(Cur_Ethnic6 = as.factor(Cur_Ethnic6)) %>%
+  mutate(AT_DigSkills = as.factor(AT_DigSkills)) %>%
+  mutate(Low_Income_finance = as.factor(Low_Income_finance))
+
+experience.recommendations <-experience.recommendations %>%
+  mutate(Openness = as.factor(Openness)) %>%
+  mutate(Cur_Ethnic6 = as.factor(Cur_Ethnic6)) %>%
+  mutate(AT_DigSkills = as.factor(AT_DigSkills)) %>%
+  mutate(Low_Income_finance = as.factor(Low_Income_finance))
+
+experience.entertainment <-experience.entertainment %>%
+  mutate(Openness = as.factor(Openness)) %>%
+  mutate(Cur_Ethnic6 = as.factor(Cur_Ethnic6)) %>%
+  mutate(AT_DigSkills = as.factor(AT_DigSkills)) %>%
+  mutate(Low_Income_finance = as.factor(Low_Income_finance))
+
+```
+
+
+```{r}
+#logistic regression x group
+############################################### recommendations #############
+weighted_logit_model <- glm(Openness ~ Cur_Ethnic6 + AT_DigSkills + Low_Income_finance, 
+                            family = binomial(link = "logit"), 
+                            data = experience.recommendations, 
+                            weights = experience.recommendations$Nov24_Weight)
+
+# Summarize the model
+summary(weighted_logit_model)
+
+
+############# education ########################################
+weighted_logit_model <- glm(Openness ~ Cur_Ethnic6 + AT_DigSkills + Low_Income_finance, 
+                            family = binomial(link = "logit"), 
+                            data = experience.education, 
+                            weights = experience.education$Nov24_Weight)
+
+# Summarize the model
+summary(weighted_logit_model)
+
+
+###### jobs ############################################
+weighted_logit_model <- glm(Openness ~ Cur_Ethnic6 + AT_DigSkills + Low_Income_finance, 
+                            family = binomial(link = "logit"), 
+                            data = experience.jobs, 
+                            weights = experience.jobs$Nov24_Weight)
+
+# Summarize the model
+summary(weighted_logit_model)
+
+
+############## emails ##############################
+weighted_logit_model <- glm(Openness ~ Cur_Ethnic6 + AT_DigSkills + Low_Income_finance, 
+                            family = binomial(link = "logit"), 
+                            data = experience.emails, 
+                            weights = experience.emails$Nov24_Weight)
+
+# Summarize the model
+summary(weighted_logit_model)
+
+######################## guidance ######################
+weighted_logit_model <- glm(Openness ~ Cur_Ethnic6 + AT_DigSkills + Low_Income_finance, 
+                            family = binomial(link = "logit"), 
+                            data = experience.guidance, 
+                            weights = experience.guidance$Nov24_Weight)
+
+# Summarize the model
+summary(weighted_logit_model)
+
+####################### entertainment ######################
+weighted_logit_model <- glm(Openness ~ Cur_Ethnic6 + AT_DigSkills + Low_Income_finance, 
+                            family = binomial(link = "logit"), 
+                            data = experience.entertainment, 
+                            weights = experience.entertainment$Nov24_Weight)
+
+# Summarize the model
+summary(weighted_logit_model)
+```
+
+```{r}
+# descriptives for open vs not open group by task
+experience.all %>%
+  filter(Question == "Entertainment (e.g.,image/video/audio generation)") %>% # replace this for each task
+  group_by(Openness, Q_Demo, A_Demo) %>%
+  tally(wt = Nov24_Weight) %>%
+  mutate(pct = n/sum(n))
+```
+
+Experience with mental health chatbot
+```{r}
+df1 %>%
+  drop_na(ExpChatbot) %>%
+  group_by(ExpChatbot) %>%
+  tally(wt = Nov24_Weight) %>%
+  mutate(pct = n/sum(n)) %>%
+  mutate(ExpChatbot = 
+           recode(ExpChatbot,
+                  "1" = "Lots of personal experience",
+                  "2" = "Some personal experience",
+                  "3" = "No personal experience",
+                  "4" = "Not sure",
+                  "-8" = "_Not sure")) 
+```
+
+```{r}
+rm(experience.all, experience.all.wide, experience.education, experience.emails, experience.entertainment, experience.guidance, experience.jobs, experience.recommendations, experienceLLM.df, weighted_logit_model, aware.df)
+```
+
+
+##### overall benefit levels and concerns #####
+```{r}
+df.benefit <- df1 %>%
+  select(panelid_2, Nov24_Weight, 
+         BenFR,
+         BenWB,
+         BenCancer,
+         BenLoan,
+         BenLLM,
+         BenChatbot,
+         BenRoboCare,
+         BenCar
+         )%>%
+  ## pivot longer
+  pivot_longer( # convert to long format 
+    names_to = "Question_b",
+    values_to = "Value_b",
+    BenFR:BenCar
+  )
+
+df.benefit$Technology_specific <- sub('.*Ben','',
+                                      df.benefit$Question_b)
+
+
+df.benefit <- df.benefit %>%
+  mutate(Value_b = 
+           case_when(
+             Value_b == -8| Value_b == -9 | Value_b == 5 ~ "Don't know/prefer not to say",
+             Value_b == 1 ~ "Very",
+             Value_b == 2 ~ "Fairly",
+             Value_b == 3 ~ "Not very",
+             Value_b == 4 ~ "Not at all",
+             TRUE ~ as.character(NA)
+           ))
+
+df.benefit$Value_b <- factor(df.benefit$Value_b,levels = c(  "Not at all", "Not very", "Don't know/prefer not to say", "Fairly", "Very")) 
+
+df.benefit <- df.benefit %>%
+  mutate(Technology_specific = 
+           recode_technologies(Technology_specific))
+```
+
+```{r}
+df.benefit %>%
+  drop_na(Value_b) %>%
+  group_by(Technology_specific, Value_b) %>%
+  tally(wt = Nov24_Weight) %>%
+  mutate(pct = n/sum(n)) %>%
+  mutate(Value_factor = 
+           case_when(Value_b == "Very" | Value_b == "Fairly" ~ "High", 
+                     TRUE ~ "Other")) %>%
+  group_by(Technology_specific, Value_factor) %>%
+  mutate(Sum_f = sum(pct)) %>%
+  #### ggplot #####
+  ggplot(aes(y=pct, x=reorder(Technology_specific, -Sum_f), fill = Value_b)) +
+  geom_col(width = 0.7) + 
+  scale_y_continuous(name = "", label = percent) +
+  theme_minimal() + 
+  theme(#panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(), 
+                        legend.position = "top", legend.text = element_text(size=8), legend.justification = "left") +
+  ggtitle("The extent to which each AI use is perceived as beneficial",
+       subtitle = "'To what extent do you think that the use of this technology will be beneficial?'") + 
+  theme(plot.title = element_text(size = 10), plot.subtitle = element_text(size=8)) +
+  scale_fill_manual(breaks = c("Very", "Fairly", "Don't know/prefer not to say", "Not very", "Not at all" ), 
+                                values = c(
+                               "#005D5D",
+                               "#009F8C",
+                               "#D5DFE8",
+                               "#ED2FE0",
+                               "#A3219A"
+                               ),
+                    name = "") +
+  xlab("") +
+  geom_text(
+    aes(label = scales::percent(pct, accuracy = 1)), position = position_stack(vjust = .5), size = 3, colour = "white") +
+  coord_flip()
+```
+
+```{r}
+df.concern <- df1 %>%
+  select(panelid_2, Nov24_Weight, 
+         ConFR,
+         ConWB,
+         ConCancer,
+         ConLoan,
+         ConLLM,
+         ConChatbot,
+         ConRoboCare,
+         ConCar
+         )%>%
+  ## pivot longer
+  pivot_longer( # convert to long format 
+    names_to = "Question_b",
+    values_to = "Value_b",
+    ConFR:ConCar
+  )
+
+df.concern$Technology_specific <- sub('.*Con','',
+                                      df.concern$Question_b)
+
+df.concern <- df.concern %>%
+  mutate(Value_b = 
+           case_when(
+             Value_b == -8| Value_b == -9 | Value_b == 5 ~ "Don't know/prefer not to say",
+             Value_b == 1 ~ "Very",
+             Value_b == 2 ~ "Fairly",
+             Value_b == 3 ~ "Not very",
+             Value_b == 4 ~ "Not at all",
+             TRUE ~ as.character(NA)
+           ))
+
+df.concern$Value_b <- factor(df.concern$Value_b,levels = c(  "Not at all", "Not very", "Don't know/prefer not to say", "Fairly", "Very")) 
+
+df.concern <- df.concern %>%
+  mutate(Technology_specific = 
+           recode_technologies(Technology_specific))
+```
+
+```{r}
+df.concern %>%
+  drop_na(Value_b) %>%
+  group_by(Technology_specific, Value_b) %>%
+  tally(wt = Nov24_Weight) %>%
+  mutate(pct = n/sum(n)) %>%
+  mutate(Value_factor = 
+           case_when(Value_b == "Very" | Value_b == "Fairly" ~ "High", 
+                     TRUE ~ "Other")) %>%
+  group_by(Technology_specific, Value_factor) %>%
+  mutate(Sum_f = sum(pct)) %>%
+  #### ggplot #####
+ggplot(aes(y=pct, x=reorder(Technology_specific, -Sum_f), fill = Value_b)) +
+  geom_col(width = 0.7) + 
+  scale_y_continuous(name = "", label = percent) +
+  theme_minimal() + 
+  theme(#panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(), 
+    legend.position = "top", legend.text = element_text(size=8), legend.justification = "left") +
+  ggtitle("The extent to which each AI use is perceived as concerning",
+          subtitle = "'To what extent are you concerned about the use of this technology?'") + 
+  theme(plot.title = element_text(size = 10), plot.subtitle = element_text(size=8)) +
+  scale_fill_manual(breaks = c("Very", "Fairly", "Don't know/prefer not to say", "Not very", "Not at all" ), 
+                    values = c(
+                      "#005D5D",
+                      "#009F8C",
+                      "#D5DFE8",
+                      "#ED2FE0",
+                      "#A3219A"
+                    ),
+                    name = "") +
+  xlab("") +
+  geom_text(
+    aes(label = scales::percent(pct, accuracy = 1)), position = position_stack(vjust = .5), size = 3, colour = "white") +
+  coord_flip()
+```
+
+Demographic groups - benefits
+```{r}
+
+df.benefit.demog <- inner_join(demog.l, df.benefit)
+
+
+#df.benefit.demog
+benefit.natrep <- df.benefit %>%
+  drop_na(Value_b) %>%
+  group_by(Technology_specific, Value_b) %>%
+  tally(wt = Nov24_Weight) %>%
+  mutate(pct = n/sum(n)) %>%
+  mutate(Value_factor = 
+           case_when(Value_b == "Very" | Value_b == "Fairly" ~ "High", 
+                     TRUE ~ "Other")) %>%
+  group_by(Technology_specific, Value_factor) %>%
+  mutate(Sum_f = sum(pct))
+
+benefit.natrep$Group <- "Nationally representative average"
+
+## Asian
+benefit.asian <- df.benefit.demog %>%
+  filter(A_Demo == "Asian or Asian British") %>%
+  drop_na(Value_b) %>%
+  group_by(Technology_specific, Value_b) %>%
+  #tally() %>% # no weighting
+  tally(wt=Nov24_Weight) %>% # with weighting
+  mutate(pct = n/sum(n)) %>%
+  mutate(Value_factor = 
+           case_when(Value_b == "Very" | Value_b == "Fairly" ~ "High", 
+                     TRUE ~ "Other")) %>%
+  group_by(Technology_specific, Value_factor) %>%
+  mutate(Sum_f = sum(pct))
+
+benefit.asian$Group <- "Asian or Asian British"
+
+## Black
+benefit.black <- df.benefit.demog %>%
+  filter(A_Demo == "Black or Black British") %>%
+  drop_na(Value_b) %>%
+  group_by(Technology_specific, Value_b) %>%
+  #tally() %>% # no weighting
+  tally(wt=Nov24_Weight) %>% # with weighting
+  mutate(pct = n/sum(n)) %>%
+  mutate(Value_factor = 
+           case_when(Value_b == "Very" | Value_b == "Fairly" ~ "High", 
+                     TRUE ~ "Other")) %>%
+  group_by(Technology_specific, Value_factor) %>%
+  mutate(Sum_f = sum(pct))
+
+benefit.black$Group <- "Black or Black British"
+
+## Low income
+benefit.li <- df.benefit.demog %>%
+  filter(Q_Demo == "Low_Income_finance") %>%
+  filter(A_Demo == "Low") %>%
+  drop_na(Value_b) %>%
+  group_by(Technology_specific, Value_b) %>%
+  #tally() %>% # no weighting
+  tally(wt=Nov24_Weight) %>% # with weighting
+  mutate(pct = n/sum(n)) %>%
+  mutate(Value_factor = 
+           case_when(Value_b == "Very" | Value_b == "Fairly" ~ "High", 
+                     TRUE ~ "Other")) %>%
+  group_by(Technology_specific, Value_factor) %>%
+  mutate(Sum_f = sum(pct))
+
+benefit.li$Group <- "Low income"
+
+## Fewer digital skills 
+benefit.digskill <- df.benefit.demog %>%
+  filter(Q_Demo == "AT_DigSkills") %>%
+  filter(A_Demo == "No digital skills") %>%
+  drop_na(Value_b) %>%
+  group_by(Technology_specific, Value_b) %>%
+  #tally() %>% # no weighting
+  tally(wt=Nov24_Weight) %>% # with weighting
+  mutate(pct = n/sum(n)) %>%
+  mutate(Value_factor = 
+           case_when(Value_b == "Very" | Value_b == "Fairly" ~ "High", 
+                     TRUE ~ "Other")) %>%
+  group_by(Technology_specific, Value_factor) %>%
+  mutate(Sum_f = sum(pct))
+
+benefit.digskill$Group <- "Fewer digital skills"
+
+## join datasets together
+benefit.join <- rbind(benefit.natrep, benefit.asian)
+
+benefit.join <- rbind(benefit.join, benefit.black)
+
+benefit.join <- rbind(benefit.join, benefit.li)
+
+benefit.join <- rbind(benefit.join, benefit.digskill)
+
+benefit.join$Group <- factor(benefit.join$Group,levels = c("Nationally representative average", "Asian or Asian British", "Black or Black British", "Low income", "Fewer digital skills"))
+```
+
+```{r}
+benefit.join %>%
+  filter(Group != "Nationally representative average") %>%
+  ggplot(aes(y=pct, x=reorder(Technology_specific, -Sum_f), fill = Value_b)) +
+  geom_col(width = 0.7) + 
+  scale_y_continuous(name = "", label = percent) +
+  theme_minimal() + 
+  theme(#panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(), 
+    legend.position = "top", legend.text = element_text(size=8), legend.justification = "left"
+    ) +
+  ggtitle("Perceived benefit levels, group comparisons",
+          subtitle = "'To what extent do you think the use of this technology will be beneficial?'") + 
+  theme(plot.title = element_text(size = 10), plot.subtitle = element_text(size=8)) +
+  scale_fill_manual(breaks = c("Very", "Fairly", "Don't know/prefer not to say", "Not very", "Not at all" ), 
+                    values = c(
+                      "#005D5D",
+                      "#009F8C",
+                      "#D5DFE8",
+                      "#ED2FE0",
+                      "#A3219A"
+                    ),
+                    name = "") +
+  xlab("") +
+  geom_text(
+    aes(label = scales::percent(pct, accuracy = 1)), position = position_stack(vjust = .5), size = 3, colour = "white") +
+  facet_wrap(~Group) +
+  coord_flip()
+```
+
+Demographic groups - concerns
+```{r}
+df.concern.demog <- inner_join(demog.l, df.concern)
+
+## Nat rep 
+concern.natrep <- df.concern %>%
+  drop_na(Value_b) %>%
+  group_by(Technology_specific, Value_b) %>%
+  tally(wt = Nov24_Weight) %>%
+  mutate(pct = n/sum(n)) %>%
+  mutate(Value_factor = 
+           case_when(Value_b == "Very" | Value_b == "Fairly" ~ "High", 
+                     TRUE ~ "Other")) %>%
+  group_by(Technology_specific, Value_factor) %>%
+  mutate(Sum_f = sum(pct))
+
+concern.natrep$Group <- "Nationally representative average"
+
+## Asian
+concern.asian <- df.concern.demog %>%
+  filter(A_Demo == "Asian or Asian British") %>%
+  drop_na(Value_b) %>%
+  group_by(Technology_specific, Value_b) %>%
+  #tally() %>% # no weighting
+  tally(wt=Nov24_Weight) %>% # with weighting
+  mutate(pct = n/sum(n)) %>%
+  mutate(Value_factor = 
+           case_when(Value_b == "Very" | Value_b == "Fairly" ~ "High", 
+                     TRUE ~ "Other")) %>%
+  group_by(Technology_specific, Value_factor) %>%
+  mutate(Sum_f = sum(pct))
+
+concern.asian$Group <- "Asian or Asian British"
+
+## Black
+concern.black <- df.concern.demog %>%
+  filter(A_Demo == "Black or Black British") %>%
+  drop_na(Value_b) %>%
+  group_by(Technology_specific, Value_b) %>%
+  #tally() %>% # no weighting
+  tally(wt=Nov24_Weight) %>% # with weighting
+  mutate(pct = n/sum(n)) %>%
+  mutate(Value_factor = 
+           case_when(Value_b == "Very" | Value_b == "Fairly" ~ "High", 
+                     TRUE ~ "Other")) %>%
+  group_by(Technology_specific, Value_factor) %>%
+  mutate(Sum_f = sum(pct))
+
+concern.black$Group <- "Black or Black British"
+
+## Low income
+concern.li <- df.concern.demog %>%
+  filter(Q_Demo == "Low_Income_finance") %>%
+  filter(A_Demo == "Low") %>%
+  drop_na(Value_b) %>%
+  group_by(Technology_specific, Value_b) %>%
+  #tally() %>% # no weighting
+  tally(wt=Nov24_Weight) %>% # with weighting
+  mutate(pct = n/sum(n)) %>%
+  mutate(Value_factor = 
+           case_when(Value_b == "Very" | Value_b == "Fairly" ~ "High", 
+                     TRUE ~ "Other")) %>%
+  group_by(Technology_specific, Value_factor) %>%
+  mutate(Sum_f = sum(pct))
+
+concern.li$Group <- "Low income"
+
+## Fewer digital skills 
+concern.digskill <- df.concern.demog %>%
+  filter(Q_Demo == "AT_DigSkills") %>%
+  filter(A_Demo == "No digital skills") %>%
+  drop_na(Value_b) %>%
+  group_by(Technology_specific, Value_b) %>%
+  #tally() %>% # no weighting
+  tally(wt=Nov24_Weight) %>% # with weighting
+  mutate(pct = n/sum(n)) %>%
+  mutate(Value_factor = 
+           case_when(Value_b == "Very" | Value_b == "Fairly" ~ "High", 
+                     TRUE ~ "Other")) %>%
+  group_by(Technology_specific, Value_factor) %>%
+  mutate(Sum_f = sum(pct))
+
+concern.digskill$Group <- "Fewer digital skills"
+
+## join datasets together
+concern.join <- rbind(concern.natrep, concern.asian)
+
+concern.join <- rbind(concern.join, concern.black)
+
+concern.join <- rbind(concern.join, concern.li)
+
+concern.join <- rbind(concern.join, concern.digskill)
+
+concern.join$Group <- factor(concern.join$Group,levels = c("Nationally representative average", "Asian or Asian British", "Black or Black British", "Low income", "Fewer digital skills"))
+```
+
+```{r}
+concern.join %>%
+  filter(Group != "Nationally representative average") %>%
+ggplot(aes(y=pct, x=reorder(Technology_specific, -Sum_f), fill = Value_b)) +
+  geom_col(width = 0.7) + 
+  scale_y_continuous(name = "", label = percent) +
+  theme_minimal() + 
+  theme(#panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(), 
+    legend.position = "top", legend.text = element_text(size=8), legend.justification = "left"
+    ) +
+  ggtitle("Concerns about AI technologies, group comparisons",
+          subtitle = "'To what are you concerned about this use of technology?'") + 
+  theme(plot.title = element_text(size = 10), plot.subtitle = element_text(size=8)) +
+  scale_fill_manual(breaks = c("Very", "Fairly", "Don't know/prefer not to say", "Not very", "Not at all" ), 
+                    values = c(
+                      "#005D5D",
+                      "#009F8C",
+                      "#D5DFE8",
+                      "#ED2FE0",
+                      "#A3219A"
+                    ),
+                    name = "") +
+  xlab("") +
+  geom_text(
+    aes(label = scales::percent(pct, accuracy = 1)), position = position_stack(vjust = .5), size = 3, colour = "white") +
+  facet_wrap(~Group) +
+  coord_flip()
+```
+```{r}
+concern.join <- concern.join %>%
+  group_by(Technology_specific, Group) %>%
+  mutate(base_n = sum(n))
+```
+
+# Format for z test comparisons
+```{r}
+
+res <- prop.test(x = c(1999.801, ## number of nat rep responses 'very' 'fairly'
+                       140.817), ## number of subgroup responses 'very' 'fairly'
+                 n = c(3513, ## nat rep sample size
+                       244.46706 ##subgroup sample size
+                       ))
+res
+```
+
+```{r}
+rm(df.benefit, df.benefit.demog, df.concern, df.concern.demog, benefit.asian, benefit.black, benefit.digskill, benefit.join, benefit.li, benefit.natrep, concern.asian, concern.black, concern.digskill, concern.join, concern.li, concern.natrep)
+```
+
+#### net benefit scores
+
+Select the overall benefit and overall concern ratings for all technologies
+```{r}
+df2 <- df1 %>%
+  select(panelid_2, Nov24_Weight, 
+         BenFR,
+         BenWB,
+         BenCancer,
+         BenLoan,
+         BenLLM,
+         BenChatbot,
+         BenRoboCare,
+         BenCar
+         )
+
+
+```
+
+```{r}
+df2 <- df2 %>%
+  pivot_longer(names_to = "Benefit",
+               values_to = "Benefit_value", 
+               BenFR:BenCar)
+
+df2$Technology_specific <- sub('.*Ben', '', df2$Benefit) # extract everything after the 'underscore'Ben' into a new variable by replacing everything before the underscore with blank space.
+```
+
+```{r}
+df3 <- df1 %>%
+  select(panelid_2, Nov24_Weight, 
+         ConFR,
+         ConWB,
+         ConCancer,
+         ConLoan,
+         ConLLM,
+         ConChatbot,
+         ConRoboCare,
+         ConCar
+         )
+```
+
+```{r}
+df3 <- df3 %>%
+  pivot_longer(names_to = "Concern",
+               values_to = "Concern_value", 
+               ConFR:ConCar)
+
+df3$Technology_specific <- sub('.*Con', '', df3$Concern)
+
+```
+
+```{r}
+df4 <- inner_join(df2, df3)
+
+df4 <- df4 %>%
+  select(!Benefit) %>%
+  select(!Concern)
+```
+
+```{r}
+df4 <- df4 %>%
+  mutate(Benefit_value = 
+           recode(Benefit_value,
+                  "1" = 3, #very beneficial
+                  "2" = 2, #fairly beneficial
+                  "3" = 1, #not very beneficial
+                  "4" = 0, #not at all beneficial
+                  "5" = as.numeric(NA),
+                  "-1" = as.numeric(NA),
+                  "-8" = as.numeric(NA),
+                  "-9" = as.numeric(NA),
+                  ))
+
+df4 <- df4 %>%
+  mutate(Concern_value = 
+           recode(Concern_value,
+                  "1" = 3, #very concerning
+                  "2" = 2, #fairly concerning
+                  "3" = 1, #not very concerning
+                  "4" = 0, #not at all concerning
+                  "5" = as.numeric(NA),
+                  "-1" = as.numeric(NA),
+                  "-8" = as.numeric(NA),
+                  "-9" = as.numeric(NA),
+                  ))
+```
+
+```{r}
+# Net benefit = benefit score - concern score
+df4 <- df4 %>%
+  mutate(net_benefit = 
+           Benefit_value-Concern_value)
+```
+
+```{r}
+# weighted mean for net benefit scores across technologies
+df5 <- df4 %>%
+  group_by(Technology_specific) %>%
+  mutate(net_benefit_mean = 
+           weighted.mean(
+             net_benefit, #Mean of this variable
+             Nov24_Weight, #weighted by variable PV25_Weight
+             na.rm = TRUE #Ignore missing values
+           )) %>%
+   ## reduce down to one summary table rather than entire dataset - filtering based on first ppt as values for net_benefit_mean are consistent throughout for each technology 
+  filter(panelid_2 == 100274) %>%
+  select(Technology_specific, net_benefit_mean)
+```
+
+
+```{r}
+df5 %>%
+  mutate(fill_var = 
+           case_when(net_benefit_mean > 0 ~ "postive",
+                     TRUE ~ "negative")) %>%
+  mutate(Technology_specific = 
+           recode_technologies(Technology_specific)) %>%
+  ggplot(aes(x = reorder(Technology_specific, +net_benefit_mean), y = net_benefit_mean, fill = fill_var)) + 
+  geom_col() +
+  coord_flip() +
+  geom_col() +
+  scale_fill_manual(values = c("#D50046",
+                               "#009FD1")) +
+  geom_text(aes(label = round(net_benefit_mean, 2))) +
+  theme_minimal() +
+  theme(legend.position = "none") +
+  xlab("") +
+  ylab("Net benefit score") +
+  ggtitle("Net benefit scores", subtitle = "2023/4") +
+  scale_y_continuous(limits=c(-3, 3), n.breaks = 6) 
+```
+```{r}
+rm(df2, df3, df4, df5)
+```
+
+#### Specific benefits and concerns
+```{r}
+df7 <- df1 %>%
+  select(panelid_2, Nov24_Weight, 
+         BenFRWhich01:BenFRWhich09,
+         BenWBWhich01:BenWBWhich10,
+         BenCancerWhich01:BenCancerWhich09,
+         BenLoanWhich01:BenLoanWhich10,
+         BenLLMWhich1:BenLLMWhich8,
+         BenChatbotWhich01:BenChatbotWhich10,
+         BenRoboCareWhich1:BenRoboCareWhich8,
+         BenCarWhich01:BenCarWhich10,
+         
+         ####
+         ConFRWhich01:ConFRWhich13,
+         ConWBWhich01:ConWBWhich14,
+         ConCancerWhich01:ConCancerWhich12,
+         ConLoanWhich01:ConLoanWhich14,
+         ConLLMWhich01:ConLLMWhich12,
+         ConChatbotWhich01:ConChatbotWhich15,
+         ConRoboCareWhich01:ConRoboCareWhich12,
+         ConCarWhich01:ConCarWhich14
+         )
+```
+
+```{r}
+df7 <- df7 %>%
+  remove_val_labels() %>%
+  pivot_longer(names_to = "Question",
+               values_to = "Value", 
+                 BenFRWhich01:ConCarWhich14)
+
+df7$Type <- sub("^(.{3}).*", "\\1", df7$Question) #Ben or Con (first three letters into new var called 'type')
+
+df7$Technology_specific <- sub('Which.*', '', df7$Question) # replace everything from and after 'which' with blank space
+
+df7$Technology_specific <- sub('.*Ben', '', df7$Technology_specific)
+
+df7$Technology_specific <- sub('.*Con', '', df7$Technology_specific)
+
+df7 <- df7 %>%
+  mutate(Technology_specific = 
+           recode_technologies(Technology_specific))
+```
+
+```{r}
+table.benefits<- df7 %>%
+  filter(Type == "Ben") %>%
+  group_by(Technology_specific, Question, Value) %>%
+  tally(wt= Nov24_Weight) %>%
+  mutate(pct = n/sum(n)) %>%
+  filter(Value == "1") %>%
+  ungroup() %>%
+  group_by(Technology_specific) %>%
+  arrange(desc(pct)) %>%
+  slice(1:3)
+
+# Table with top 3 concerns
+table.concerns<- df7 %>%
+  filter(Type == "Con") %>%
+  group_by(Technology_specific, Question, Value) %>%
+  tally(wt= Nov24_Weight) %>%
+  mutate(pct = n/sum(n)) %>%
+  filter(Value == "1") %>%
+  ungroup() %>%
+  group_by(Technology_specific) %>%
+  arrange(desc(pct)) %>%
+  slice(1:3)
+
+```
+
+```{r}
+rm(df7, table.benefits, table.concerns)
+```
+
+### mechanisms for increasing comfort with AI
+```{r}
+comf.df <- df1 %>%
+  select(panelid_2, Nov24_Weight, Cur_GOR,
+         AIComfort01:AIComfort13
+         ) %>%
+  pivot_longer(
+    names_to = "Question",
+    values_to = "Value",
+    AIComfort01:AIComfort13
+  )
+
+comf.df <- comf.df %>%
+  mutate("Question" = 
+  dplyr::recode(Question, 
+      "AIComfort01" = "Explanations of AI systems make decisions in general",
+      "AIComfort02" = "Information on how AI systems made a decision about you",
+      "AIComfort03" = "More human involvement",
+      "AIComfort04" = "Procedures for appealing decisions",
+      "AIComfort05" = "Government regulator approval",
+      "AIComfort06" = "Laws and regulations",
+      "AIComfort07" = "Security of personal information",
+      "AIComfort08" = "Monitoring to check for discrimination",
+      "AIComfort09" = "Something else",
+      "AIComfort10" = "None of these",
+      "AIComfort11" = "Nothing",
+      "AIComfort12" = "Don't know/prefer not to say",
+      "AIComfort13" = "Don't know/prefer not to say")) 
+
+comf.df <- comf.df %>%
+  mutate("Cur_GOR" = 
+  dplyr::recode(Cur_GOR, 
+      "-9" = as.character(NA),
+      "-8" = as.character(NA),
+      "-1" = as.character(NA),
+      "1" = "North East",
+      "2" = "North West",
+      "3" = "Yorkshire and The Humber",
+      "4" = "East Midlands",
+      "5" = "West Midlands",
+      "6" = "East of England",
+      "7" = "London",
+      "8" = "South East",
+      "9" = "South West",
+      "10" = "Wales",
+      "11" = "Scotland",
+      "12" = "Northern Ireland",
+      "13" = "Channel Islands",
+      "14" = "Isle of Man")) %>%
+  mutate(Region = 
+           case_when(Cur_GOR == "Wales" ~ "Wales",
+                     Cur_GOR == "Northern Ireland" ~ "Northern Ireland",
+                     Cur_GOR == "Scotland" ~ "Scotland",
+                     TRUE ~ "England"))
+
+comf.df %>%
+  drop_na(Value) %>%
+  group_by(Question, Value) %>%
+  tally(wt = Nov24_Weight) %>%
+  mutate(pct = n/sum(n)) %>%
+  filter(Value == 1) %>%
+  ggplot(aes(y=pct, x=reorder(Question, -pct))) + 
+  geom_col(fill = "#FF6A58") + 
+    scale_y_continuous(name = "", label = percent) +
+    geom_text(aes(label = scales::percent(pct, accuracy = 1)), vjust = -0.5) +
+    theme_minimal() + 
+    theme(
+        axis.text.x = element_text(angle=45, hjust=1)) + 
+    coord_cartesian(ylim=c(0, 1))   +
+    ggtitle("Comfort with AI",
+            subtitle = "'Which of the following, if any, would make you more comfortable with AI technologies being used? Please select all that apply'") +
+  scale_x_discrete(labels = function(x) str_wrap(x, width = 25)) +
+    xlab(" ") 
+```
+```{r}
+rm(comf.df)
+```
+
+### comfort with AI decision-making
+```{r}
+df1 %>%
+  drop_na(AIDecideComf) %>%
+  mutate(AIDecideComf = 
+           recode(AIDecideComf,
+         "1" = "Very comfortable",
+         "2" = "Somewhat comfortable",
+         "3" = "Not very comfortable",
+         "4" = "Not at all comfortable",
+         "5" = "Don't know/prefer not to say")) %>%
+  group_by(AIDecideComf) %>%
+  tally(wt = Nov24_Weight) %>%
+  mutate(pct = n/sum(n)) %>%
+  ggplot(aes(y=pct, x=AIDecideComf)) + 
+  geom_col(fill = "#005D5D") + 
+    scale_y_continuous(name = "", label = percent) +
+    geom_text(aes(label = scales::percent(pct, accuracy = 1)), hjust = -0.5) +
+    theme_minimal() + 
+    theme(
+        axis.text.x = element_text(angle=45, hjust=1)) + 
+    ggtitle("Comfort with AI decion-making", subtitle = "Overall, how comfortable, or not, are you with AI technologies being used to a make a decision that affects \nyour life?") +
+  scale_x_discrete(labels = function(x) str_wrap(x, width = 25)) +
+  theme(plot.title = element_text(size = 10), plot.subtitle = element_text(size=8)) +
+    xlab(" ") +
+  coord_flip(ylim=c(0, 1))
+```
+
+## Explainability vs accuracy
+```{r}
+explain.df <- df1 %>%
+  select(panelid_2, Nov24_Weight, AT_AgeCat,
+         AIDecide)
+
+# prep data
+explain.df <- explain.df %>%
+  mutate("AIDecide" = 
+  dplyr::recode(AIDecide, 
+      "1" = "Accuracy is more important than providing an explanation",
+      "2" = "Sometimes explanation should be given, even if that makes the AI decision less accurate",
+      "3" = "An explanation should always be given, even if that makes all AI decisions less accurate",
+      "4" = "Humans, not computers, should always make the decisions and be able to explain them to the people affected",
+      "5" = "Don't know/prefer not to say",
+      "6" = "Don't know/prefer not to say"))
+
+## create total summary table
+explain.df.t <- explain.df %>%
+  drop_na(AIDecide) %>%
+  group_by(AIDecide) %>%
+  tally(wt = Nov24_Weight) %>%
+  mutate(pct = n/sum(n))
+
+explain.df.t$AT_AgeCat <- "Total"
+## create a summary table by age
+explain.df.a <- explain.df %>%
+  drop_na(AIDecide) %>%
+  group_by(AT_AgeCat, 
+           AIDecide) %>%
+  tally(wt = Nov24_Weight) %>%
+  mutate(pct = n/sum(n))
+
+## merge tables
+explain.df.all <- rbind(explain.df.t, explain.df.a)
+
+## relevel the data - explain b
+explain.df.all$AIDecide <- factor(explain.df.all$AIDecide,levels = c( "Don't know/prefer not to say",  
+                                                        "Humans, not computers, should always make the decisions and be able to explain them to the people affected", 
+                                                        "An explanation should always be given, even if that makes all AI decisions less accurate",
+                                                        "Sometimes explanation should be given, even if that makes the AI decision less accurate",
+                                                        "Accuracy is more important than providing an explanation"))
+```
+
+```{r}
+## relevel the data - demographics 
+explain.df.all <- explain.df.all %>%
+  mutate(AT_AgeCat =
+           recode(AT_AgeCat, 
+      "1" = "18-24 yrs",
+      "2" = "25-34 yrs",
+      "3" = "35-44 yrs",
+      "4" = "45-54 yrs",
+      "5" = "55-64 yrs", 
+      "6" = "65-74 yrs",
+      "7" = "75+ yrs")) 
+
+explain.df.all$AT_AgeCat <- factor(explain.df.all$AT_AgeCat,levels = c("75+ yrs",
+                                                             "65-74 yrs",
+                                                             "55-64 yrs",
+                                                             "45-54 yrs",
+                                                             "35-44 yrs",
+                                                             "25-34 yrs",
+                                                             "18-24 yrs",
+                                                             "Total")) 
+```
+
+```{r}
+## overall plot 
+explain.df.all %>%
+  drop_na() %>%
+  ggplot(aes(y=pct, x=AT_AgeCat, fill = AIDecide)) + 
+  geom_col(width = 0.7) + 
+  scale_y_continuous(name = "", label = percent) +
+  theme_minimal() + 
+  theme(panel.grid.major = element_blank(), panel.grid.minor = element_blank(), 
+                        legend.position = "top", legend.text = element_text(size=8), legend.title =  element_text(size = 10)) +
+  labs(title="Explainability vs accuracy",
+       subtitle = "'Overall, which statement do you feel best reflects your personal opinion?'") + 
+  theme(plot.title = element_text(size = 14)) +
+ # theme(axis.line.x = element_line(arrow = grid::arrow(length = unit(0.3, "cm"), 
+  #                                                     ends = "both"))) +
+  scale_fill_manual(breaks = c("Accuracy is more important than providing an explanation", 
+                               "Sometimes explanation should be given, even if that makes the AI decision less accurate", 
+                               "An explanation should always be given, even if that makes all AI decisions less accurate", 
+                               "Humans, not computers, should always make the decisions and be able to explain them to the people affected", 
+                               "Don't know/prefer not to say"), 
+                                values = c(
+                               "#FF6A58",
+                               "#FFD2CD",
+                               "#D5DFE8",
+                               "#7A99B6",
+                               "grey"),
+                    name = "",
+                    labels = function(x) str_wrap(x, width = 20)) +
+  xlab("") + 
+  geom_text(
+    aes(label = scales::percent(pct, accuracy = 1)), position = position_stack(vjust = .5), size = 3) +
+  coord_flip() 
+```
+```{r}
+rm(explain.df, explain.df.a, explain.df.all, explain.df.t)
+```
+
+## Encountering harms online
+```{r}
+harms.df <- df1 %>%
+  select(panelid_2, Nov24_Weight,
+         AIHarm_ContPromVio_q:AIHarm_DeepfakeImages_q
+         ) %>%
+  pivot_longer(
+    names_to = "Question",
+    values_to = "Value",
+    AIHarm_ContPromVio_q:AIHarm_DeepfakeImages_q
+  )
+
+harms.df <- harms.df %>%
+  mutate("Question" = 
+  dplyr::recode(Question, 
+      "AIHarm_ContPromVio_q" = "Content that promotes violence, abuse or hate",
+      "AIHarm_FalseInfo_q" = "False or misleading information",
+      "AIHarm_FinFrauds_q" = "Financial frauds or scams",
+      "AIHarm_DeepfakeImages_q" = "Deepfake image and/or audiovisual clips")) 
+
+
+harms.df <- harms.df %>%
+  mutate(Value = 
+           case_when(Value == -9 | Value == -8 | Value == 4 ~ "Don't know/prefer not to say",
+                     Value == 1 ~ "Many times",
+                     Value == 2 ~ "A few times",
+                     Value == 3 ~ "Never",
+                     TRUE ~ as.character(NA)))
+
+harms.df$Value <- factor(harms.df$Value,levels = c( "Never","I am unsure if these were generated by AI", "Don't know/prefer not to say", "A few times", "Many times")) 
+```
+
+```{r}
+harms.df %>%
+  drop_na(Value) %>%
+  group_by(Question, Value) %>%
+  tally(wt = Nov24_Weight) %>%
+  mutate(pct = n/sum(n)) %>%
+  mutate(Value_factor = 
+           case_when(Value == "Many times" | Value == "A few times" ~ "High", 
+                     TRUE ~ "Other")) %>%
+  group_by(Question, Value_factor) %>%
+  mutate(Sum_f = sum(pct)) %>%
+  #### ggplot #####
+ggplot(aes(y=pct, x=reorder(Question, -Sum_f), fill = Value)) +
+  geom_col(width = 0.7) + 
+  scale_y_continuous(name = "", label = percent) +
+  theme_minimal() + 
+  theme(#panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(), 
+    legend.position = "top", legend.text = element_text(size=8), legend.justification = "left") +
+  ggtitle("To what extent have you encountered the following types of harms online\nthat might have been generated by AI?") + 
+  theme(plot.title = element_text(size = 10)) +
+  scale_fill_manual(breaks = c("Many times", "A few times", "Don't know/prefer not to say", "I am unsure if these were generated by AI", "Never"   ), 
+                    values = c(
+                      "#005D5D",
+                      "#009F8C",
+                      "#D5DFE8",
+                      "#ED2FE0",
+                      "#A3219A"
+                    ),
+                    name = "") +
+  xlab("") +
+  geom_text(
+    aes(label = scales::percent(pct, accuracy = 1)), position = position_stack(vjust = .5), size = 3, colour = "white") +
+  scale_x_discrete(labels = function(x) str_wrap(x, width = 20)) +
+  theme(axis.text.y = element_text(hjust=1, size =6), 
+          legend.position = "top",
+        legend.text = element_text(size = 6),
+          plot.title = element_text(size = 10),
+          plot.subtitle = element_text(size = 8))+
+  coord_flip()
+```
+Harms x demographic groups
+```{r}
+harms.df <- inner_join(harms.df, demog.l)
+
+harms.df %>%
+  drop_na(Value) %>%
+  group_by(Q_Demo, A_Demo, Question, Value) %>%
+  tally(wt = Nov24_Weight) %>%
+  mutate(pct = n/sum(n))
+```
+```{r}
+rm(harms.df)
+```
+
+
+Concern around harms online
+```{r}
+df1 %>%
+  drop_na(AIHarmConcern) %>%
+  mutate(AIHarmConcern = 
+           case_when(AIHarmConcern == -8 | AIHarmConcern == -9 ~ "Don't know/prefer not to say",
+                     AIHarmConcern == 1 ~ "Very concerned",
+                     AIHarmConcern == 2 ~ "Somewhat concerned",
+                     AIHarmConcern == 3 ~ "Not very concerned",
+                     AIHarmConcern == 4 ~ "Not at all concerned")) %>%
+  group_by(AIHarmConcern) %>%
+  tally(wt = Nov24_Weight) %>%
+  mutate(pct = n/sum(n)) 
+```
+
+## Expectations of responsibility around safety
+```{r}
+AIReg.df <- df1 %>%
+  select(panelid_2, Nov24_Weight, AT_AgeCat, Cur_GOR, 
+         AIReg01:AIReg11
+         ) %>%
+  pivot_longer(
+    names_to = "Question",
+    values_to = "Value",
+    AIReg01:AIReg11
+  )
+
+AIReg.df <- AIReg.df %>%
+  mutate("Question" = 
+  dplyr::recode(Question, 
+      "AIReg01" = "The companies developing the AI technology",
+      "AIReg02" = "Independent scientists and researchers",
+      "AIReg03" = "Central government ministers",
+      "AIReg04" = "An independent regulator",
+      "AIReg05" = "International standards bodies",
+      "AIReg06" = "An independent oversight committee with citizen involvement",
+      "AIReg07" = "The org/inst using the AI (e.g. companies, public services)",
+      "AIReg08" = "Other (please specify)",
+      "AIReg09" = "No one should be responsible",
+      "AIReg10" = "Don't know/prefer not to say",
+      "AIReg11" = "prefer not to say")) 
+
+AIReg.df <- AIReg.df %>%
+  mutate("Cur_GOR" = 
+  dplyr::recode(Cur_GOR, 
+      "-9" = as.character(NA),
+      "-8" = as.character(NA),
+      "-1" = as.character(NA),
+      "1" = "North East",
+      "2" = "North West",
+      "3" = "Yorkshire and The Humber",
+      "4" = "East Midlands",
+      "5" = "West Midlands",
+      "6" = "East of England",
+      "7" = "London",
+      "8" = "South East",
+      "9" = "South West",
+      "10" = "Wales",
+      "11" = "Scotland",
+      "12" = "Northern Ireland",
+      "13" = "Channel Islands",
+      "14" = "Isle of Man"))
+
+# overall preference
+AIReg.df %>%
+  drop_na(Value) %>%
+  group_by(Question, Value) %>%
+  tally(wt = Nov24_Weight) %>%
+  mutate(pct = n/sum(n)) %>%
+  filter(Value == 1) %>%
+  ggplot(aes(y=pct, x=reorder(Question, -pct))) + 
+  geom_col(fill = "#FF6A58") + 
+    scale_y_continuous(name = "", label = percent) +
+    geom_text(aes(label = scales::percent(pct, accuracy = 1)), vjust = 0) +
+    theme_minimal() + 
+    
+    coord_cartesian(ylim=c(0, 1))   +
+    ggtitle("Who do you think should be most responsible for ensuring AI is used safely?",
+            subtitle = "Select up to three options.") +
+  scale_x_discrete(labels = function(x) str_wrap(x, width = 25)) +
+  theme(axis.text.x = element_text(angle=45, hjust=1), 
+        
+          plot.title = element_text(size = 10),
+          plot.subtitle = element_text(size = 8)) + 
+    xlab(" ") +
+  coord_flip()
+```
+```{r}
+# AI reg by region
+AIReg.df %>%
+  mutate(Region = 
+           case_when(Cur_GOR == "Wales" ~ "Wales",
+                     Cur_GOR == "Northern Ireland" ~ "Northern Ireland",
+                     Cur_GOR == "Scotland" ~ "Scotland",
+                     TRUE ~ "England")) %>%
+  group_by(Region, Question, Value) %>%
+  tally(wt = Nov24_Weight) %>%
+  mutate(pct = n/sum(n)) %>%
+  filter(Value == 1) %>%
+  mutate(Fill_var = case_when(
+    Question == "An independent oversight committee with citizen involvement" | Question == "International standards bodies" | Question == "Independent scientists and researchers" ~ "Fill",
+    TRUE ~ "No_fill"
+  )) %>%
+  ggplot(aes(y=pct, x=reorder(Question, -pct), fill = Fill_var)) + 
+  geom_col() + 
+    scale_y_continuous(name = "", label = percent) +
+    geom_text(aes(label = scales::percent(pct, accuracy = 1)), vjust = -0.5) +
+    theme_minimal() + 
+    theme(axis.text.x = element_text(angle=45, hjust=1, size = 5),
+          legend.position = "none") + 
+    coord_cartesian(ylim=c(0, 1))   +
+    ggtitle("Who do you think should be most responsible for ensuring AI is used safely?",
+            subtitle = "Regional variation") +
+  scale_x_discrete(labels = function(x) str_wrap(x, width = 25)) +
+  
+  scale_fill_manual(values = c("#ED2FE0",
+                               "#005D5D")) + 
+  facet_wrap(~Region, nrow=2) +
+    xlab(" ") 
+```
+```{r}
+rm(AIReg.df)
+```
+
+
+## Importance of government and regulators having powers around AI
+```{r}
+powers.df <- df1 %>%
+  select(panelid_2, Nov24_Weight,
+         AIGov_MonAIRisk_q:AIGov_StopAIProduct_q
+         ) %>%
+  pivot_longer(
+    names_to = "Question",
+    values_to = "Value",
+    AIGov_MonAIRisk_q:AIGov_StopAIProduct_q
+  )
+
+powers.df <- powers.df %>%
+  mutate("Question" = 
+  dplyr::recode(Question, 
+      "AIGov_MonAIRisk_q" = "Active monitoring of the risks posed by AI systems",
+      "AIGov_DevAISafety_q" = "Develop safety standards on AI use",
+      "AIGov_AccessAIInfo_q" = "Access information about the safety of AI systems directly from developers",
+      "AIGov_StopAIProduct_q" = "Stop the use of an AI product if it poses a risk of serious harm")) 
+
+powers.df %>%
+  group_by(Value) %>%
+  tally()
+
+powers.df <- powers.df %>%
+  mutate(Value = 
+           case_when(Value < 0 | Value == 5 ~ "Don't know/prefer not to say",
+                     Value == 1 ~ "Very important",
+                     Value == 2 ~ "Somewhat important",
+                     Value == 3 ~ "Not very important",
+                     Value == 4 ~ "Not at all important")) 
+
+powers.df$Value <- factor(powers.df$Value,levels = c(  "Not at all important", "Not very important", "Don't know/prefer not to say", "Somewhat important", "Very important")) 
+```
+
+```{r}
+powers.df %>%
+  drop_na(Value) %>%
+  group_by(Question, Value) %>%
+  tally(wt = Nov24_Weight) %>%
+  mutate(pct = n/sum(n)) %>%
+  #mutate(across(where(is.numeric), round, 0)) %>%
+  mutate(Value_factor = 
+           case_when(Value == "Very important" | Value == "Somewhat important" ~ "High", 
+                     TRUE ~ "Other")) %>%
+  group_by(Question, Value_factor) %>%
+  mutate(Sum_f = sum(pct)) %>%
+  #### ggplot #####
+ggplot(aes(y=pct, x=reorder(Question, -Sum_f), fill = Value)) +
+  geom_col(width = 0.7) + 
+  scale_y_continuous(name = "", label = percent) +
+  theme_minimal() + 
+  theme(#panel.grid.major = element_blank(), 
+    panel.grid.minor = element_blank(), 
+    legend.position = "top", legend.text = element_text(size=8), legend.justification = "left") +
+  ggtitle("'How important do you think it is that the Government or regulators, instead of only private companies,\nhave the following powers?'") + 
+  theme(plot.title = element_text(size = 10)) +
+  scale_fill_manual(breaks = c("Very important", 
+                               "Somewhat important", 
+                               "Don't know/prefer not to say", 
+                               "Not very important", 
+                               "Not at all important"), 
+                    values = c(
+                      "#005D5D",
+                      "#009F8C",
+                      "#D5DFE8",
+                      "#ED2FE0",
+                      "#A3219A"
+                    ),
+                    name = "") +
+  xlab("") +
+  geom_text(
+    aes(label = ifelse(pct > 0.05, scales::percent(pct, accuracy = 1), "")),
+          #scales::percent(pct, accuracy = 1)), 
+        position = position_stack(vjust = .5), 
+        size = 3, 
+        colour = "white") +
+  scale_x_discrete(labels = function(x) str_wrap(x, width = 20)) +
+  theme(axis.text.y = element_text(hjust=1, size =6), 
+          legend.position = "top",
+        legend.text = element_text(size = 6),
+          plot.title = element_text(size = 10),
+          plot.subtitle = element_text(size = 8)) +
+  coord_flip()
+```
+
+```{r}
+rm(powers.df)
+```
+
+
+## Public sector data sharing
+```{r}
+df1 %>%
+  drop_na(AIConcern) %>%
+  mutate(AIConcern = 
+           recode(AIConcern,
+         "1" = "Very concerned",
+         "2" = "Somewhat concerned",
+         "3" = "Not very concerned",
+         "4" = "Not at all concerned",
+         "5" = "Don't know/prefer not to say")) %>%
+  group_by(AIConcern) %>%
+  tally() %>%
+  mutate(pct = n/sum(n)) %>%
+  ggplot(aes(y=pct, x=AIConcern)) + 
+  geom_col(fill = "#005D5D") + 
+    scale_y_continuous(name = "", label = percent) +
+    geom_text(aes(label = scales::percent(pct, accuracy = 1)), hjust = -0.5) +
+    theme_minimal() + 
+    theme(
+        axis.text.x = element_text(hjust=-0.5)) + 
+    ggtitle("Public sector data sharing", subtitle = "How concerned do you feel, or not, about public sector bodies sharing data about you with private companies \nto train AI systems?") +
+  scale_x_discrete(labels = function(x) str_wrap(x, width = 25)) +
+  theme(plot.title = element_text(size = 10), plot.subtitle = element_text(size=8)) +
+    xlab(" ") +
+    coord_flip(ylim=c(0, 1))
+```
+
+## Public voice in AI
+```{r}
+df1 %>%
+  drop_na(AIDecideVal) %>%
+  mutate(AIDecideVal = 
+           recode(AIDecideVal,
+         "1" = "Strongly agree",
+         "2" = "Agree",
+         "3" = "Disagree",
+         "4" = "Strongly disagree",
+         "5" = "Don't know/prefer not to say")) %>%
+  group_by(AIDecideVal) %>%
+  tally(wt = Nov24_Weight) %>%
+  mutate(pct = n/sum(n)) %>%
+  ggplot(aes(y=pct, x=reorder(AIDecideVal, -pct))) + 
+  geom_col(fill = "#FF6A58") + 
+    scale_y_continuous(name = "", label = percent) +
+    geom_text(aes(label = scales::percent(pct, accuracy = 1)), vjust = -0.5) +
+    theme_minimal() + 
+    theme(
+        axis.text.x = element_text(angle=45, hjust=1)) + 
+    coord_cartesian(ylim=c(0, 1))   +
+    ggtitle("My views and values are represented in decision making") +
+  scale_x_discrete(labels = function(x) str_wrap(x, width = 25)) +
+    xlab(" ") 
+```
+
+
+
